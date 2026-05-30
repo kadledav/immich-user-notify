@@ -1,0 +1,8 @@
+{
+  "title.new_photos": "New photos",
+  "title.album_shared": "Album shared with you",
+  "body.assets_added_single": "{name} added new photos to \"{album}\".",
+  "body.assets_added_multiple": "More photos were added to \"{album}\".",
+  "body.member_added": "You have been added to \"{album}\".",
+  "name.someone": "Someone"
+}

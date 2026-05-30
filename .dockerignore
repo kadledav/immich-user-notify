@@ -7,3 +7,12 @@ __pycache__/
 .venv/
 venv/
 .env
+tests/
+requirements-dev.txt
+pytest.ini
+.pytest_cache/
+.coverage
+htmlcov/
+*.db
+*.db-wal
+*.db-shm

@@ -1,0 +1,4 @@
+# Development / test dependencies. Not baked into the published image.
+-r requirements.txt
+pytest==8.3.*
+responses==0.25.*

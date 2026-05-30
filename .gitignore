@@ -4,3 +4,10 @@ __pycache__/
 .idea
 venv/
 .env
+.pytest_cache/
+.coverage
+htmlcov/
+*.db
+*.db-wal
+*.db-shm
+*.sqlite3

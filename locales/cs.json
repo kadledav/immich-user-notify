@@ -1,0 +1,8 @@
+{
+  "title.new_photos": "Nové fotky",
+  "title.album_shared": "Sdílené album",
+  "body.assets_added_single": "{name} přidal(a) nové fotky do alba „{album}“.",
+  "body.assets_added_multiple": "Do alba „{album}“ byly přidány nové fotky.",
+  "body.member_added": "Byli jste přidáni do alba „{album}“.",
+  "name.someone": "Někdo"
+}
