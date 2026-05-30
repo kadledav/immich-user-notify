@@ -9,20 +9,36 @@
 #   - some reachable host/IP        -> http://192.168.1.10:2283   (then remove the `immich` network)
 
 services:
+  # ntfy must be reachable by your users' phones to receive pushes — that normally means
+  # exposing it to the internet over HTTPS (a reverse proxy) or via a VPN/Tailscale. iOS
+  # in particular needs a public HTTPS URL plus the upstream poke below. The `ports`
+  # mapping exposes it directly; if you run Traefik, use the labels block instead (and
+  # delete it entirely if you don't use Traefik).
   ntfy:
     image: binwiederhier/ntfy:latest
     container_name: ntfy
     command: serve
     environment:
       - TZ=${TZ:-UTC}
-      - NTFY_BASE_URL=${NTFY_BASE_URL:-http://localhost:8080}
+      - NTFY_BASE_URL=${NTFY_BASE_URL:-http://localhost:8080}   # set to your PUBLIC https URL
       - NTFY_AUTH_FILE=/var/lib/ntfy/user.db
       - NTFY_AUTH_DEFAULT_ACCESS=deny-all      # explicit per-user access (see README)
+      - NTFY_UPSTREAM_BASE_URL=https://ntfy.sh # required for instant push on iOS
+      #- NTFY_BEHIND_PROXY=true                # uncomment when behind a reverse proxy
     volumes:
       - ntfy-data:/var/lib/ntfy
       - ntfy-cache:/var/cache/ntfy
     ports:
-      - "8080:80"                              # subscribe at http://<host>:8080/<topic>
+      - "8080:80"                              # direct access; remove if using Traefik
+    # --- Traefik (optional) -------------------------------------------------
+    # If you use Traefik, uncomment these and remove the `ports` mapping above. Traefik
+    # must share a Docker network with this service. Delete this block if you don't use it.
+    #labels:
+    #  - "traefik.enable=true"
+    #  - "traefik.http.routers.ntfy.rule=Host(`ntfy.example.com`)"
+    #  - "traefik.http.routers.ntfy.entrypoints=websecure"
+    #  - "traefik.http.routers.ntfy.tls.certresolver=letsencrypt"
+    #  - "traefik.http.services.ntfy.loadbalancer.server.port=80"
     restart: unless-stopped
 
   immich-user-notify:

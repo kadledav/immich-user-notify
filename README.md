@@ -33,6 +33,12 @@ independent implementation with a different design:
    (With ntfy's default deny-all, also grant each person read access to their topic, e.g.
    `ntfy access alice immich-alice ro`.)
 
+> **ntfy must be reachable by your users' devices.** A LAN-only ntfy only delivers at home;
+> for notifications anywhere, expose ntfy over **HTTPS** (a reverse proxy such as Traefik —
+> see [`docker-compose.example.yml`](docker-compose.example.yml)) or a VPN. **iOS** additionally
+> needs a public HTTPS URL and `NTFY_UPSTREAM_BASE_URL=https://ntfy.sh` (for instant push via
+> APNS). `immich-user-notify` itself only talks to ntfy internally and is **not** exposed.
+
 Within one poll interval, new photos and album shares start arriving as pushes.
 
 ## What gets notified
@@ -144,6 +150,9 @@ their own topic on their ntfy server/app (the topic shown in the startup log).
 
 ### ntfy quirks worth knowing
 
+- **ntfy needs to be reachable by the phones.** Expose it over HTTPS (reverse proxy) or a
+  VPN; LAN-only delivers at home only. iOS instant push additionally needs a public HTTPS
+  URL + `NTFY_UPSTREAM_BASE_URL=https://ntfy.sh`.
 - **The notification icon is Android-only.** The Immich-logo icon (`NTFY_ICON_URL`) appears
   on Android; **on iOS, ntfy always uses its own app icon** — there is no per-message icon
   on iOS, so nothing this app sends can change that.
