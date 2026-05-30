@@ -52,6 +52,7 @@ class AlbumDetail:
     id: str
     name: str
     owner_id: str
+    created_at: datetime
     updated_at: datetime
     owner: Member
     members: list[Member]   # albumUsers; does NOT include the owner

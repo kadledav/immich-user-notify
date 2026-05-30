@@ -5,46 +5,89 @@ your account can see and sends a **per-user** [ntfy](https://ntfy.sh) push when
 photos or members are added — notifying everyone who can see the album **except**
 the person who made the change.
 
-It is inspired by [pman07/Immich_Notify](https://github.com/pman07/Immich_Notify)
-(notification style) but fixes its two main limitations:
+Inspired by [pman07/Immich_Notify](https://github.com/pman07/Immich_Notify), but a fresh,
+independent implementation with a different design:
 
 - **No per-album setup.** It discovers all albums automatically — nothing to configure per album.
 - **Per-user, not one shared topic.** Each person gets their own ntfy topic derived from their email, and the person who *caused* a change isn't pinged about their own action.
+
+## Quick start
+
+1. **Immich API key** — in Immich, *Account Settings → API Keys*, create a key with the
+   `album.read` and `user.read` permissions, from an account that can see every album you
+   want monitored.
+2. **ntfy publisher** — on your ntfy server, create the account this app publishes with and
+   allow it to publish to the `immich-*` topics:
+   `ntfy user add immich-notify` then `ntfy access immich-notify 'immich-*' wo`.
+3. **Configure** — `cp .env.example .env` and fill in the Immich token + URLs and the ntfy
+   publisher credentials.
+4. **Run** — `docker compose -f docker-compose.example.yml up -d`, or fold the
+   `immich-user-notify` service into your existing stack (see
+   [`docker-compose.example.yml`](docker-compose.example.yml)).
+5. **Subscribe** — each person subscribes to **their own topic** in the ntfy app. The topic
+   is `immich-` + the part of their email before `@` (lowercased, other characters → `-`).
+   The container logs the full `email → topic` map on startup. Examples:
+   - `david.k@example.com` → **`immich-david-k`**
+   - `jana@example.com` → **`immich-jana`**
+
+   (With ntfy's default deny-all, also grant each person read access to their topic, e.g.
+   `ntfy access alice immich-alice ro`.)
+
+Within one poll interval, new photos and album shares start arriving as pushes.
+
+## What gets notified
+
+| Scenario | Who gets notified |
+|---|---|
+| Create + share a **new album** | each person it's shared with → "You have been added to …" (the owner/creator is not notified) |
+| A new person is added to an **existing album** | only that newly added person |
+| **New photo(s)** added to a tracked album | everyone who can see the album, **minus** the sole contributor (if all the new photos share one owner). |
+| New member **and** new photos in the **same cycle** | the invited member gets **only** "You have been added …" — not also the "new photos" message |
+| Photos/members **removed** | nobody (state is updated silently) |
+| Albums that already existed on first run | nobody (baselined silently — see [How it works](#how-it-works)) |
+
+Nobody who already had access is pinged about a share, and a freshly invited member is never spammed with the album's existing activity.
 
 ## How it works
 
 Every `PERIODIC_CHECK_INTERVAL_MINUTES` it:
 
-1. Lists albums (`GET /api/albums`) and, for any album whose `assetCount`/`updatedAt`
-   changed, fetches the detail (`GET /api/albums/{id}`).
+1. Lists albums (`GET /api/albums`) and, for any album whose `assetCount`/member count/
+   `updatedAt` changed, fetches the detail (`GET /api/albums/{id}`).
 2. Diffs the album's asset-ID set and member-ID set against a small local SQLite DB
    (it stores **only IDs**, never photo names). New asset IDs and new member IDs are
    the changes.
 3. Attributes each new photo to its uploader via `asset.ownerId` — in Immich only an
    asset's owner can add it to an album, so this reliably identifies the contributor.
 4. Sends notifications:
-   - **New photos** → everyone who can see the album, **minus** the contributor.
-     If a single person added them the message names them; if several people did, it
-     stays anonymous.
-   - **New member** → only the newly added member (`You have been added to "<album>"`).
-     No one else is told that someone joined.
+   - **New photos** → everyone who can see the album, **minus** the contributor,
+     regardless of when the photos were originally uploaded. If a single person added
+     them the message names them; if several people did, it stays anonymous.
+   - **New member / new shared album** → only the newly added member
+     (`You have been added to "<album>"`). No one else is told that someone joined, and a
+     member invited this cycle gets *only* this access message — not also a "new photos"
+     notification for the album's existing contents.
 
 Safety details:
 
-- **First sight of an album is a silent baseline** — it records the current contents
-  and notifies nothing, so deploying (or losing the DB) never floods everyone.
-- **Recency guard**: a newly detected photo older than `3 ×` the interval (by upload
-  time) is recorded as seen but not notified — this prevents a storm after the service
-  was down for a while.
+- **Bootstrap baseline** — on the app's **first run** it records a one-time timestamp
+  and silently baselines every album that already exists. Those pre-existing albums
+  never notify about their existing contents, so deploying against your library (or
+  losing the DB) doesn't flood everyone.
+- **New vs. pre-existing albums** — an album first seen *after* the bootstrap is treated
+  as genuinely new only if its `createdAt` is later than the bootstrap; then its members
+  get a "you have been added" notification. An old album that merely becomes visible to
+  the account later (e.g. shared with it) stays silent, so you aren't spammed about an
+  album's whole back-catalogue.
 - One ntfy topic per person, derived from their email: `immich-` followed by the part
   before `@`, with every character outside `[A-Za-z0-9_-]` replaced by `-`, lowercased.
   e.g. `david.k@example.com` → topic `immich-david-k`. **At startup the full
   `email → topic` map is logged** (with a warning on any collision) so you know exactly
   which topic each person must subscribe to.
 
-> Note on attribution: there is no Immich API for *when* an asset was added to an album
-> (only when it was uploaded), which is why detection uses snapshot diffing. Requires
-> **Immich ≥ 2.7.5**.
+> Note: Immich exposes no "added-to-album" timestamp (only the asset's upload time),
+> which is why detection relies on snapshot diffing rather than timestamps — that's
+> also why adding an old photo to an album still notifies. Requires **Immich ≥ 2.7.5**.
 
 ## Configuration
 
@@ -52,7 +95,7 @@ All configuration is via environment variables (typically set in Docker).
 
 | Env var | Required | Default | Meaning |
 |---|---|---|---|
-| `IMMICH_TOKEN` | yes | — | Immich API key (sent as the `x-api-key` header) |
+| `IMMICH_TOKEN` | yes | — | Immich API key, sent as `x-api-key` (needs `album.read` + `user.read` — see below) |
 | `IMMICH_PRIVATE_URL` | yes | — | Internal Immich base URL, e.g. `http://immich_server:2283` |
 | `IMMICH_PUBLIC_URL` | yes | — | Public Immich URL for notification links, e.g. `https://photos.example.com` |
 | `NTFY_INTERNAL_URL` | yes | — | Internal ntfy base URL, e.g. `http://ntfy:80` |
@@ -62,14 +105,29 @@ All configuration is via environment variables (typically set in Docker).
 | `DEFAULT_LANGUAGE` | no | `en` | language for everyone unless overridden (e.g. `cs`) |
 | `USER_LANGUAGES` | no | — | per-person overrides by email, e.g. `david.k@example.com=cs,jane@example.com=en` |
 | `LOCALES_DIR` | no | bundled `locales/` | directory of `<lang>.json` translation files |
-| `NTFY_ICON_URL` | no | — | optional icon URL shown on notifications |
+| `NTFY_ICON_URL` | no | Immich logo | icon shown on notifications (a publicly reachable URL the phone can fetch) |
 | `DB_PATH` | no | `/data/state.db` | SQLite state file (mount a volume here) |
 | `FORCE_FULL_SCAN_EVERY` | no | `8` | every Nth run, re-scan every album (self-heals missed change signals) |
-| `RECENCY_MULTIPLIER` | no | `3` | recency window = this × the interval (older additions are recorded but not notified) |
 | `HTTP_TIMEOUT_S` | no | `30` | per-request HTTP timeout (seconds) |
 | `HTTP_RETRIES` | no | `3` | total HTTP attempts per request (incl. the first) |
 | `TZ` | no | `UTC` | affects log timestamps only (change detection is always UTC) |
 | `LOG_LEVEL` | no | `INFO` | logging level (unknown values fall back to `INFO`) |
+
+### Immich API key permissions
+
+Create the key under **Account Settings → API Keys**. Only **read** scopes are needed
+(the app never writes to Immich):
+
+| Permission | Used for |
+|---|---|
+| `album.read` | List albums and read each album's assets + shared members — the core of change detection. **Required.** |
+| `user.read` | The startup `email → topic` mapping (lists all users) and resolving a contributor's display name when they aren't in an album's member list. Pick `user.read`, **not** `adminUser.read` (that one is only for the `/admin/users` endpoints, which this app never calls). |
+
+`album.read` is essential. Without `user.read` the app still detects changes and sends
+notifications — recipient emails come from the album payload itself — but the startup
+mapping log and the contributor-name fallback are skipped. Selecting **All** permissions
+also works, it's just broader than necessary. Either way, the key's account must **own or
+be shared into** every album you want monitored.
 
 ## Notifications
 
@@ -94,35 +152,23 @@ the same keys as `locales/en.json`. Currently bundled: **English** (`en`) and
 
 ## Deployment (Docker)
 
-```yaml
-services:
-  immich-user-notify:
-    image: ghcr.io/OWNER/immich-user-notify:latest   # replace OWNER with your GitHub user/org
-    container_name: immich_user_notify
-    restart: unless-stopped
-    depends_on: [ntfy]
-    networks: [home-docker-net]
-    environment:
-      TZ: ${TZ}
-      IMMICH_TOKEN: ${IMMICH_API_KEY}
-      IMMICH_PRIVATE_URL: http://immich_server:2283
-      IMMICH_PUBLIC_URL: https://photos.example.com
-      NTFY_INTERNAL_URL: http://ntfy:80
-      NTFY_PUBLISHER_USERNAME: ${NTFY_PUBLISHER_USERNAME}
-      NTFY_PUBLISHER_PASSWORD: ${NTFY_PUBLISHER_PASSWORD}
-      PERIODIC_CHECK_INTERVAL_MINUTES: "15"
-      DEFAULT_LANGUAGE: cs
-    volumes:
-      - /path/on/host/immich-user-notify:/data
-```
+Use [`docker-compose.example.yml`](docker-compose.example.yml) — a ready-to-edit stack
+(immich-user-notify + ntfy) with named volumes — together with [`.env.example`](.env.example).
+To add it to an existing stack instead, copy just the `immich-user-notify` service and make
+sure the container can reach both your Immich server (`IMMICH_PRIVATE_URL`) and ntfy
+(`NTFY_INTERNAL_URL`). The published image is `ghcr.io/kadledav/immich-user-notify`,
+or build it locally with `build: .`.
 
 **Prerequisites:**
 
-1. The `NTFY_PUBLISHER_*` account needs **write** access to the per-user topics
-   (e.g. `ntfy access <publisher> '*' write`).
-2. Each person must be able to **read** their own topic and subscribe to it.
-3. The `IMMICH_TOKEN` account must **own or be shared into** every album you want
-   monitored (it can only see albums it has access to).
+1. The `NTFY_PUBLISHER_*` account must be allowed to publish to the per-user topics, e.g.
+   `ntfy access immich-notify 'immich-*' wo`.
+2. Each person needs read access to their own topic and must subscribe to it, e.g.
+   `ntfy access alice immich-alice ro` (ntfy defaults to deny-all).
+3. The `IMMICH_TOKEN` key needs the `album.read` and `user.read` permissions (see
+   [Immich API key permissions](#immich-api-key-permissions)), and its account must
+   **own or be shared into** every album you want monitored (it can only see albums it
+   has access to).
 
 ## Development
 
@@ -140,14 +186,17 @@ $env:DB_PATH = ".\state.db"
 python main.py
 ```
 
-The published image is built and pushed to `ghcr.io/<your-github-user-or-org>/immich-user-notify`
+The published image is built and pushed to `ghcr.io/kadledav/immich-user-notify`
 by the [`docker-publish`](.github/workflows/docker-publish.yml) GitHub Actions workflow on
-push to `main` / a `v*` tag (the image name is derived automatically from the repository).
+push to `main` / a `v*` tag.
 
 ## Limitations / notes
 
-- There is no Immich "added-to-album" timestamp, so adding a long-ago-uploaded photo may
-  fall outside the recency window and not notify (it's still recorded as seen).
+- Albums that already exist on the app's first run are baselined silently; their
+  existing contents never notify (only changes made afterward do).
+- An old album that becomes visible to the account *after* the first run (e.g. someone
+  shares an existing album with it) is treated as pre-existing and stays silent, since
+  Immich can't tell us whether its members are genuinely new.
 - Two different emails can sanitize to the same topic; this is surfaced in the startup
   log so you can spot it.
 - Additions only: removals (photos or members) update local state silently and never notify.

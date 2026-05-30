@@ -130,6 +130,16 @@ def test_messages_per_recipient_language(translator):
     assert msgs[0].body == "Alice přidal(a) nové fotky do alba „Trip“."
 
 
+def test_assets_event_suppresses_newly_added_member(translator):
+    # bob is the sole contributor (excluded); alice was just invited this cycle (suppressed)
+    ev = AssetsAddedEvent("assets_added", "album-1", "Trip", 1, ["bob"])
+    msgs = build_messages(
+        ev, _recips(), translator=translator, public_url="https://p", icon_url=None,
+        contributor_names={"bob": "Bob"}, suppress_user_ids={"alice"},
+    )
+    assert {m.topic for m in msgs} == {"immich-owner"}
+
+
 def test_contributor_name_fallback_someone(translator):
     ev = AssetsAddedEvent("assets_added", "album-1", "Trip", 1, ["ghost"])
     msgs = build_messages(

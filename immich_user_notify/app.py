@@ -17,7 +17,7 @@ from .config import Config, topic_for_email
 from .detector import diff_album
 from .i18n import Translator
 from .immich_client import ImmichClient, ImmichError
-from .models import AssetsAddedEvent, Member
+from .models import AssetsAddedEvent, Member, MemberAddedEvent
 from .notifier import build_messages, build_recipients
 from .ntfy_client import NtfyClient, NtfyError
 from .store import Store
@@ -89,6 +89,9 @@ class App:
             self._config.force_full_scan_every > 0
             and run_count % self._config.force_full_scan_every == 0
         )
+        # One-time boundary: albums that existed at bootstrap are "already mine" and
+        # baselined silently; albums created after it are new and notify their members.
+        bootstrap_at = self._store.get_or_set_bootstrap_at(now)
         stats.albums_seen = len(albums)
 
         for summary in albums:
@@ -115,14 +118,14 @@ class App:
             stats.albums_fetched += 1
 
             try:
-                self._process_album(summary, detail, prior, now, stats)
+                self._process_album(summary, detail, prior, bootstrap_at, stats)
             except Exception:  # never let one album kill the run
                 log.exception("error processing album %s (%s)", detail.id, detail.name)
                 stats.errors += 1
 
         return stats
 
-    def _process_album(self, summary, detail, prior, now, stats: RunStats) -> None:
+    def _process_album(self, summary, detail, prior, bootstrap_at, stats: RunStats) -> None:
         known_assets = self._store.get_known_asset_ids(detail.id)
         known_members = self._store.get_known_member_ids(detail.id)
 
@@ -131,8 +134,7 @@ class App:
             prior=prior,
             known_asset_ids=known_assets,
             known_member_ids=known_members,
-            now=now,
-            recency_window_s=self._config.recency_window_seconds,
+            bootstrap_at=bootstrap_at,
         )
 
         if diff.events:
@@ -178,6 +180,11 @@ class App:
             user_languages=self._config.user_languages,
         )
         contributor_names = self._contributor_names(detail, events)
+        # A member invited this cycle gets only the "you have been added" message,
+        # not also the album's new-photo notification.
+        new_member_ids = {
+            e.new_member.user_id for e in events if isinstance(e, MemberAddedEvent)
+        }
 
         messages = []
         for event in events:
@@ -188,6 +195,7 @@ class App:
                 public_url=self._config.immich_public_url,
                 icon_url=self._config.icon_url,
                 contributor_names=contributor_names,
+                suppress_user_ids=new_member_ids,
             )
         stats.events += len(events)
 

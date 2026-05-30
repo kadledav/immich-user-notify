@@ -1,8 +1,6 @@
 FROM python:3.12-slim
 
-# The CI workflow (docker/metadata-action) sets the real image.source label at
-# publish time from the repository, so this default is just a placeholder.
-LABEL org.opencontainers.image.source=https://github.com/OWNER/immich-user-notify
+LABEL org.opencontainers.image.source=https://github.com/kadledav/immich-user-notify
 LABEL org.opencontainers.image.description="Per-user ntfy notifications for Immich album changes"
 LABEL org.opencontainers.image.licenses=MIT
 

@@ -73,6 +73,7 @@ def album_detail(
     members: list[dict] = (),
     assets: list[dict] = (),
     updated_at: datetime = NOW,
+    created_at: datetime | None = None,
 ) -> dict:
     return {
         "id": id,
@@ -84,7 +85,7 @@ def album_detail(
         "assets": list(assets),
         "assetCount": len(assets),
         "shared": True,
-        "createdAt": iso(updated_at),
+        "createdAt": iso(created_at or updated_at),
         "updatedAt": iso(updated_at),
     }
 
@@ -108,12 +109,14 @@ def D(
     members: list[Member] = (),
     assets: list[Asset] = (),
     updated_at: datetime = NOW,
+    created_at: datetime | None = None,
 ) -> AlbumDetail:
     owner = owner or M("owner", "owner@example.com", "Owner")
     return AlbumDetail(
         id=id,
         name=name,
         owner_id=owner.user_id,
+        created_at=created_at or updated_at,
         updated_at=updated_at,
         owner=owner,
         members=list(members),

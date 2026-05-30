@@ -18,12 +18,17 @@ BASE_ENV = {
 def test_defaults_and_url_stripping():
     c = load_config(BASE_ENV)
     assert c.interval_minutes == 15
-    assert c.recency_multiplier == 3
     assert c.http_retries == 3
     assert c.http_timeout_s == 30.0
     assert c.immich_api_base == "http://immich:2283/api"   # trailing slash stripped
     assert c.immich_public_url == "https://photos.example.com"
+    assert c.icon_url.endswith("immich-logo.png")          # default icon = Immich logo
     assert not hasattr(c, "tz")  # dead field removed
+
+
+def test_icon_url_override():
+    c = load_config({**BASE_ENV, "NTFY_ICON_URL": "https://example.com/x.png"})
+    assert c.icon_url == "https://example.com/x.png"
 
 
 def test_missing_required_lists_all():
@@ -39,16 +44,14 @@ def test_tunables_are_read_from_env():
         {
             **BASE_ENV,
             "PERIODIC_CHECK_INTERVAL_MINUTES": "30",
-            "RECENCY_MULTIPLIER": "2",
             "HTTP_TIMEOUT_S": "5.5",
             "HTTP_RETRIES": "4",
         }
     )
     assert c.interval_minutes == 30
-    assert c.recency_multiplier == 2
     assert c.http_timeout_s == 5.5
     assert c.http_retries == 4
-    assert c.recency_window_seconds == 2 * 30 * 60
+    assert c.interval_seconds == 30 * 60
 
 
 @pytest.mark.parametrize(
@@ -56,7 +59,6 @@ def test_tunables_are_read_from_env():
     [
         {"HTTP_RETRIES": "abc"},          # not an int
         {"HTTP_RETRIES": "0"},            # below minimum
-        {"RECENCY_MULTIPLIER": "0"},      # below minimum
         {"HTTP_TIMEOUT_S": "nope"},       # not a number
         {"PERIODIC_CHECK_INTERVAL_MINUTES": "0"},
     ],

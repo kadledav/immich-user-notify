@@ -196,6 +196,27 @@ class Store:
 
     # --- run counter ------------------------------------------------------
 
+    def get_or_set_bootstrap_at(self, now: datetime) -> datetime:
+        """Return the one-time bootstrap timestamp (set on the very first run).
+
+        Albums that already existed at this moment are treated as pre-existing and
+        baselined silently; albums created after it are 'new' and notify their members.
+        """
+        row = self._conn.execute(
+            "SELECT value FROM schema_meta WHERE key = 'bootstrap_at'"
+        ).fetchone()
+        if row is not None:
+            return parse_immich_dt(row["value"])
+        self._conn.execute(
+            "INSERT INTO schema_meta(key, value) VALUES('bootstrap_at', ?)"
+            " ON CONFLICT(key) DO NOTHING",
+            (to_iso_utc(now),),
+        )
+        row = self._conn.execute(
+            "SELECT value FROM schema_meta WHERE key = 'bootstrap_at'"
+        ).fetchone()
+        return parse_immich_dt(row["value"])
+
     def get_run_count(self) -> int:
         row = self._conn.execute(
             "SELECT value FROM schema_meta WHERE key = 'run_count'"

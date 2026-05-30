@@ -1,0 +1,59 @@
+# Example deployment for immich-user-notify, with a self-hosted ntfy alongside it.
+#
+#   1. cp .env.example .env   (and fill it in)
+#   2. docker compose -f docker-compose.example.yml up -d
+#
+# immich-user-notify must reach BOTH ntfy and your Immich server. ntfy is included here
+# (reached internally at http://ntfy:80). For Immich, set IMMICH_PRIVATE_URL in .env:
+#   - same Docker network as Immich -> http://immich_server:2283  (keep the `immich` network below)
+#   - some reachable host/IP        -> http://192.168.1.10:2283   (then remove the `immich` network)
+
+services:
+  ntfy:
+    image: binwiederhier/ntfy:latest
+    container_name: ntfy
+    command: serve
+    environment:
+      - TZ=${TZ:-UTC}
+      - NTFY_BASE_URL=${NTFY_BASE_URL:-http://localhost:8080}
+      - NTFY_AUTH_FILE=/var/lib/ntfy/user.db
+      - NTFY_AUTH_DEFAULT_ACCESS=deny-all      # explicit per-user access (see README)
+    volumes:
+      - ntfy-data:/var/lib/ntfy
+      - ntfy-cache:/var/cache/ntfy
+    ports:
+      - "8080:80"                              # subscribe at http://<host>:8080/<topic>
+    restart: unless-stopped
+
+  immich-user-notify:
+    image: ghcr.io/kadledav/immich-user-notify:latest   # published image; or use `build: .`
+    container_name: immich-user-notify
+    restart: unless-stopped
+    depends_on:
+      - ntfy
+    environment:
+      - TZ=${TZ:-UTC}
+      - IMMICH_TOKEN=${IMMICH_TOKEN}
+      - IMMICH_PRIVATE_URL=${IMMICH_PRIVATE_URL}
+      - IMMICH_PUBLIC_URL=${IMMICH_PUBLIC_URL}
+      - NTFY_INTERNAL_URL=http://ntfy:80
+      - NTFY_PUBLISHER_USERNAME=${NTFY_PUBLISHER_USERNAME}
+      - NTFY_PUBLISHER_PASSWORD=${NTFY_PUBLISHER_PASSWORD}
+      - PERIODIC_CHECK_INTERVAL_MINUTES=${PERIODIC_CHECK_INTERVAL_MINUTES:-15}
+      - DEFAULT_LANGUAGE=${DEFAULT_LANGUAGE:-en}
+      - USER_LANGUAGES=${USER_LANGUAGES:-}
+    volumes:
+      - immich-user-notify-data:/data          # SQLite state; keep it to preserve baselines
+    networks:
+      - default                                # reach ntfy
+      - immich                                 # reach the Immich server (see note above)
+
+networks:
+  immich:
+    external: true
+    name: ${IMMICH_NETWORK:-immich_default}    # the Docker network your Immich stack uses
+
+volumes:
+  ntfy-data:
+  ntfy-cache:
+  immich-user-notify-data:

@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from typing import Mapping, Sequence
+from typing import Iterable, Mapping, Sequence
 
 from .config import topic_for_email
 from .i18n import Translator
@@ -77,14 +77,24 @@ def build_recipients(
     return recipients
 
 
-def select_recipients(event: Event, all_recipients: Sequence[Recipient]) -> list[Recipient]:
-    """Apply the per-event recipient rule."""
+def select_recipients(
+    event: Event,
+    all_recipients: Sequence[Recipient],
+    *,
+    suppress_user_ids: Iterable[str] = (),
+) -> list[Recipient]:
+    """Apply the per-event recipient rule.
+
+    `suppress_user_ids` are people who must not receive an *asset* notification this
+    cycle — used to keep a just-invited member from also getting "N photos added" on
+    top of their "you have been added" message.
+    """
     if isinstance(event, AssetsAddedEvent):
+        excluded = set(suppress_user_ids)
         distinct = set(event.contributor_ids)
-        if len(distinct) == 1:
-            only = next(iter(distinct))
-            return [r for r in all_recipients if r.user_id != only]
-        return list(all_recipients)  # 0 (shouldn't happen) or >=2 -> exclude nobody
+        if len(distinct) == 1:  # sole contributor isn't told about their own upload
+            excluded |= distinct
+        return [r for r in all_recipients if r.user_id not in excluded]
     if isinstance(event, MemberAddedEvent):
         # Only the newly added member is notified.
         return [r for r in all_recipients if r.user_id == event.new_member.user_id]
@@ -99,9 +109,10 @@ def build_messages(
     public_url: str,
     icon_url: str | None,
     contributor_names: Mapping[str, str],
+    suppress_user_ids: Iterable[str] = (),
 ) -> list[OutgoingMessage]:
     """Build one message per target recipient, localized to that recipient."""
-    targets = select_recipients(event, all_recipients)
+    targets = select_recipients(event, all_recipients, suppress_user_ids=suppress_user_ids)
     if not targets:
         return []
 

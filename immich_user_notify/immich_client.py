@@ -69,6 +69,7 @@ def _map_album_detail(dto: dict[str, Any]) -> AlbumDetail:
         id=dto["id"],
         name=dto["albumName"],
         owner_id=dto["ownerId"],
+        created_at=parse_immich_dt(dto["createdAt"]),
         updated_at=parse_immich_dt(dto["updatedAt"]),
         owner=_map_user(dto["owner"]),
         members=_map_members(dto),

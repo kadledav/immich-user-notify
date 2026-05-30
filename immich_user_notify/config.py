@@ -23,6 +23,10 @@ _TOPIC_PREFIX = "immich-"
 # Default location of the bundled locale files: <repo>/locales, sibling of this package.
 _DEFAULT_LOCALES_DIR = str(Path(__file__).resolve().parent.parent / "locales")
 
+# Shown as the notification icon; the ntfy client (phone) fetches it, so it must be a
+# publicly reachable URL. The Immich logo is a sensible default.
+_DEFAULT_ICON_URL = "https://raw.githubusercontent.com/immich-app/immich/main/design/immich-logo.png"
+
 _REQUIRED = (
     "IMMICH_TOKEN",
     "IMMICH_PRIVATE_URL",
@@ -52,8 +56,7 @@ class Config:
     default_language: str = "en"
     user_languages: Mapping[str, str] = field(default_factory=dict)  # email(lower) -> lang
     locales_dir: str = _DEFAULT_LOCALES_DIR
-    icon_url: str | None = None
-    recency_multiplier: int = 3
+    icon_url: str | None = _DEFAULT_ICON_URL
     http_timeout_s: float = 30.0
     http_retries: int = 3
 
@@ -64,10 +67,6 @@ class Config:
     @property
     def interval_seconds(self) -> int:
         return self.interval_minutes * 60
-
-    @property
-    def recency_window_seconds(self) -> int:
-        return self.recency_multiplier * self.interval_seconds
 
 
 def topic_for_email(email: str) -> str:
@@ -161,7 +160,6 @@ def load_config(env: Mapping[str, str] | None = None) -> Config:
             errors.append(f"PERIODIC_CHECK_INTERVAL_MINUTES must be an integer, got {raw_interval!r}")
 
     force_full_scan_every = _int_env(env, "FORCE_FULL_SCAN_EVERY", 8, minimum=0, errors=errors)
-    recency_multiplier = _int_env(env, "RECENCY_MULTIPLIER", 3, minimum=1, errors=errors)
     http_retries = _int_env(env, "HTTP_RETRIES", 3, minimum=1, errors=errors)
     http_timeout_s = _float_env(env, "HTTP_TIMEOUT_S", 30.0, minimum=0.1, errors=errors)
 
@@ -182,8 +180,7 @@ def load_config(env: Mapping[str, str] | None = None) -> Config:
         default_language=(env.get("DEFAULT_LANGUAGE") or "en").strip().lower(),
         user_languages=parse_user_languages(env.get("USER_LANGUAGES") or ""),
         locales_dir=(env.get("LOCALES_DIR") or _DEFAULT_LOCALES_DIR).strip(),
-        icon_url=(env.get("NTFY_ICON_URL") or "").strip() or None,
-        recency_multiplier=recency_multiplier,
+        icon_url=(env.get("NTFY_ICON_URL") or "").strip() or _DEFAULT_ICON_URL,
         http_timeout_s=http_timeout_s,
         http_retries=http_retries,
     )
