@@ -142,6 +142,15 @@ Two notification types (message text comes from the locale files):
 Tapping a notification opens the album in `IMMICH_PUBLIC_URL`. Each person subscribes to
 their own topic on their ntfy server/app (the topic shown in the startup log).
 
+### ntfy quirks worth knowing
+
+- **The notification icon is Android-only.** The Immich-logo icon (`NTFY_ICON_URL`) appears
+  on Android; **on iOS, ntfy always uses its own app icon** — there is no per-message icon
+  on iOS, so nothing this app sends can change that.
+- **ntfy is deny-all by default.** The publisher account needs write access to the
+  `immich-*` topics, and each person needs read access to their own topic (see
+  [Quick start](#quick-start)).
+
 ## Languages
 
 Immich does **not** expose a per-user language via its API, so language is configured

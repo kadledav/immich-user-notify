@@ -132,7 +132,7 @@ def build_messages(
                 body = translator.t(
                     r.lang, "body.assets_added_multiple", album=event.album_name
                 )
-            tags = ["camera_with_flash"]
+            tags = ["camera_flash"]  # 📸 — must be a valid ntfy emoji short code
             priority = 4
         elif isinstance(event, MemberAddedEvent):
             title = translator.t(r.lang, "title.album_shared")

@@ -24,7 +24,7 @@ def test_publish_payload_and_auth(ntfy, mocked_responses, ntfy_base):
         message="body",
         title="Title",
         priority=4,
-        tags=["camera_with_flash"],
+        tags=["camera_flash"],
         click="https://x/albums/1",
         icon="https://i",
     )
@@ -34,7 +34,7 @@ def test_publish_payload_and_auth(ntfy, mocked_responses, ntfy_base):
     body = json.loads(req.body)
     assert body["title"] == "Title"
     assert body["priority"] == 4
-    assert body["tags"] == ["camera_with_flash"]
+    assert body["tags"] == ["camera_flash"]
     assert body["click"] == "https://x/albums/1"
     assert body["icon"] == "https://i"
     assert body["message"] == "body"

@@ -82,7 +82,7 @@ def test_messages_single_contributor_en(translator):
     m = msgs[0]
     assert m.title == "New photos"
     assert m.body == 'Alice added new photos to "Trip".'
-    assert m.tags == ["camera_with_flash"]
+    assert m.tags == ["camera_flash"]
     assert m.priority == 4
     assert m.click == "https://p.example.com/albums/album-1"
 
