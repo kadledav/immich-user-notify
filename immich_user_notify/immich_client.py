@@ -1,4 +1,4 @@
-"""Typed wrapper over the Immich REST API (3.0.0; not compatible with 2.x).
+"""Typed wrapper over the Immich 3.x REST API (developed against 3.0.0; not 2.x).
 
 Dumb client: HTTP in, dataclasses out, retries inside. No business logic.
 Auth is the `x-api-key` header set on the session.

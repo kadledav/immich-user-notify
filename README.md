@@ -5,9 +5,10 @@ your account can see and sends a **per-user** [ntfy](https://ntfy.sh) push when
 photos or members are added — notifying everyone who can see the album **except**
 the person who made the change.
 
-Requires **Immich ≥ 3.0.0**. Immich 3.0 reworked the album API (no more `owner`/`assets`
-fields), so this version is not compatible with Immich 2.x — see
-[Upgrading from an Immich 2.x setup](#upgrading-from-an-immich-2x-setup).
+Targets the **Immich 3.x** API (developed against **3.0.0**). Immich 3.0 reworked the
+album API — `owner`/`ownerId` and `assets` are gone from album responses — so this
+release does not work with Immich 2.x, and the older 2.x-era release does not work with
+Immich 3.x. See [Upgrading from an Immich 2.x setup](#upgrading-from-an-immich-2x-setup).
 
 Inspired by [pman07/Immich_Notify](https://github.com/pman07/Immich_Notify), but a fresh,
 independent implementation with a different design:
@@ -19,7 +20,7 @@ independent implementation with a different design:
 
 1. **Immich API key** — in Immich, *Account Settings → API Keys*, create a key with the
    `album.read` and `user.read` permissions, from an account that can see every album you
-   want monitored. Requires **Immich 3.0.0 or newer**.
+   want monitored. Needs an **Immich 3.x** server.
 2. **ntfy publisher** — on your ntfy server, create the account this app publishes with and
    allow it to publish to the `immich-*` topics:
    `ntfy user add immich-notify` then `ntfy access immich-notify 'immich-*' wo`.
@@ -106,8 +107,10 @@ Safety details:
 > also why adding an old photo to an album still notifies. `updatedAt` is a bonus
 > change signal, not a guarantee: `assetCount`, the member count and
 > `FORCE_FULL_SCAN_EVERY` are what make detection self-healing.
-> Requires **Immich ≥ 3.0.0** — the 3.0 album API is not backward compatible, so this
-> version does **not** work with Immich 2.x (and vice versa).
+> Built for the **Immich 3.x** album API (verified against 3.0.0) and tied to it: the
+> 3.0 API is not backward compatible with 2.x, and a future major Immich release may
+> well break it again. The server version is logged on startup, with a warning if it
+> isn't 3.x.
 
 ### Upgrading from an Immich 2.x setup
 
@@ -205,8 +208,8 @@ or build it locally with `build: .`.
    `ntfy access immich-notify 'immich-*' wo`.
 2. Each person needs read access to their own topic and must subscribe to it, e.g.
    `ntfy access alice immich-alice ro` (ntfy defaults to deny-all).
-3. Immich must be **3.0.0 or newer**; the version is logged (and a mismatch warned about)
-   on startup.
+3. The Immich server must be **3.x** (developed against 3.0.0); the version is logged on
+   startup, with a warning if it isn't.
 4. The `IMMICH_TOKEN` key needs the `album.read` and `user.read` permissions (see
    [Immich API key permissions](#immich-api-key-permissions)), and its account must
    **own or be shared into** every album you want monitored (it can only see albums it
