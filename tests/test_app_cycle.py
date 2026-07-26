@@ -3,10 +3,11 @@ import logging
 from datetime import timedelta
 
 import responses
-from builders import NOW, album_detail, album_summary, asset, user
+from builders import NOW, album_detail, album_summary, user
 
 from immich_user_notify.app import App
 from immich_user_notify.config import Config
+from immich_user_notify.store import Store
 
 
 def _posts(rsps):
@@ -52,20 +53,19 @@ def test_full_cycle_exact_posts(
     app = App(config, immich, ntfy, store, translator, clock=clock)
 
     t0 = NOW - timedelta(hours=2)
-    a1 = asset("a1", "owner", t0)
 
     # --- Cycle 1: pre-existing album (created before bootstrap) -> silent baseline ---
     mocked_responses.get(_albums(immich_base), json=[album_summary(owner=owner, asset_count=1, updated_at=t0, members=members)])
-    mocked_responses.get(_album(immich_base), json=album_detail(owner=owner, members=members, assets=[a1], updated_at=t0))
+    mocked_responses.get(_album(immich_base), json=album_detail(owner=owner, members=members, counts={"owner": 1}, updated_at=t0))
     app.run_once()
     assert _posts(mocked_responses) == []
+    assert store.get_contributor_counts("album-1") == {"owner": 1}
 
-    # --- Cycle 2: Bob adds a photo that was UPLOADED long ago -> still notifies ---
+    # --- Cycle 2: Bob adds a photo -> notifies everyone but Bob ---
     mocked_responses.reset()
-    a2 = asset("a2", "userb", NOW - timedelta(days=30))  # old upload, added to album now
     t1 = NOW - timedelta(minutes=5)
     mocked_responses.get(_albums(immich_base), json=[album_summary(owner=owner, asset_count=2, updated_at=t1, members=members)])
-    mocked_responses.get(_album(immich_base), json=album_detail(owner=owner, members=members, assets=[a1, a2], updated_at=t1))
+    mocked_responses.get(_album(immich_base), json=album_detail(owner=owner, members=members, counts={"owner": 1, "userb": 1}, updated_at=t1))
     mocked_responses.post(f"{ntfy_base}/", status=200)
     app.run_once()
 
@@ -83,7 +83,7 @@ def test_full_cycle_exact_posts(
     dave = user("dave", "dave@example.com", "Dave")
     members3 = [carol, bob, dave]
     mocked_responses.get(_albums(immich_base), json=[album_summary(owner=owner, asset_count=2, updated_at=t1, members=members3)])
-    mocked_responses.get(_album(immich_base), json=album_detail(owner=owner, members=members3, assets=[a1, a2], updated_at=t1))
+    mocked_responses.get(_album(immich_base), json=album_detail(owner=owner, members=members3, counts={"owner": 1, "userb": 1}, updated_at=t1))
     mocked_responses.post(f"{ntfy_base}/", status=200)
     app.run_once()
 
@@ -100,9 +100,9 @@ def test_full_cycle_exact_posts(
     assert all("/albums/album-1" not in c.request.url for c in mocked_responses.calls)
 
 
-def _baseline(app, mr, immich_base, owner, members, assets, updated_at):
-    mr.get(_albums(immich_base), json=[album_summary(owner=owner, asset_count=len(assets), updated_at=updated_at, members=members)])
-    mr.get(_album(immich_base), json=album_detail(owner=owner, members=members, assets=assets, updated_at=updated_at))
+def _baseline(app, mr, immich_base, owner, members, counts, updated_at):
+    mr.get(_albums(immich_base), json=[album_summary(owner=owner, asset_count=sum(counts.values()), updated_at=updated_at, members=members)])
+    mr.get(_album(immich_base), json=album_detail(owner=owner, members=members, counts=counts, updated_at=updated_at))
     app.run_once()
     mr.reset()
 
@@ -122,23 +122,42 @@ def test_no_albums(app, mocked_responses, immich_base):
     assert stats.albums_seen == 0
 
 
-def test_old_upload_photo_still_notifies(app, store, mocked_responses, immich_base, ntfy_base):
+def test_added_photo_notifies_and_is_recorded(app, store, mocked_responses, immich_base, ntfy_base):
     owner = user("owner", "owner@example.com", "Owner")
     member = user("m", "m@example.com", "M")
     t0 = NOW - timedelta(hours=3)
-    _baseline(app, mocked_responses, immich_base, owner, [member], [asset("a1", "owner", t0)], t0)
+    _baseline(app, mocked_responses, immich_base, owner, [member], {"owner": 1}, t0)
 
-    old = asset("old", "owner", NOW - timedelta(days=400))  # uploaded ages ago, added now
     t1 = NOW - timedelta(minutes=1)
     mocked_responses.get(_albums(immich_base), json=[album_summary(owner=owner, asset_count=2, updated_at=t1, members=[member])])
-    mocked_responses.get(_album(immich_base), json=album_detail(owner=owner, members=[member], assets=[asset("a1", "owner", t0), old], updated_at=t1))
+    mocked_responses.get(_album(immich_base), json=album_detail(owner=owner, members=[member], counts={"owner": 2}, updated_at=t1))
     mocked_responses.post(f"{ntfy_base}/", status=200)
     app.run_once()
 
     posts = _posts(mocked_responses)
     assert {_topic(p) for p in posts} == {"immich-m"}   # owner is sole contributor -> excluded
     assert _body(posts[0])["title"] == "New photos"
-    assert "old" in store.get_known_asset_ids("album-1")
+    assert store.get_contributor_counts("album-1") == {"owner": 2}
+
+
+def test_asset_count_unchanged_but_updated_at_bumped_still_notifies(
+    app, store, mocked_responses, immich_base, ntfy_base
+):
+    # One photo removed, another added by someone else: assetCount is identical, so only
+    # updatedAt opens the gate -- and the per-contributor deltas find the real change.
+    owner = user("owner", "owner@example.com", "Owner")
+    bob = user("bob", "bob@example.com", "Bob")
+    t0 = NOW - timedelta(hours=3)
+    _baseline(app, mocked_responses, immich_base, owner, [bob], {"owner": 2}, t0)
+
+    t1 = NOW - timedelta(minutes=1)
+    mocked_responses.get(_albums(immich_base), json=[album_summary(owner=owner, asset_count=2, updated_at=t1, members=[bob])])
+    mocked_responses.get(_album(immich_base), json=album_detail(owner=owner, members=[bob], counts={"owner": 1, "bob": 1}, updated_at=t1))
+    mocked_responses.post(f"{ntfy_base}/", status=200)
+    app.run_once()
+
+    assert {_topic(p) for p in _posts(mocked_responses)} == {"immich-owner"}  # bob excluded
+    assert store.get_contributor_counts("album-1") == {"owner": 1, "bob": 1}
 
 
 def test_new_album_notifies_its_members(
@@ -151,7 +170,7 @@ def test_new_album_notifies_its_members(
     # Run 1: a pre-existing (old) album -> sets bootstrap_at = NOW, baselined silently.
     old_dt = NOW - timedelta(days=5)
     mocked_responses.get(_albums(immich_base), json=[album_summary(id="album-1", owner=owner, asset_count=1, updated_at=old_dt, members=[])])
-    mocked_responses.get(_album(immich_base, "album-1"), json=album_detail(id="album-1", owner=owner, members=[], assets=[asset("a1", "owner", old_dt)], updated_at=old_dt))
+    mocked_responses.get(_album(immich_base, "album-1"), json=album_detail(id="album-1", owner=owner, members=[], counts={"owner": 1}, updated_at=old_dt))
     app.run_once()
     assert _posts(mocked_responses) == []
     mocked_responses.reset()
@@ -170,30 +189,43 @@ def test_new_album_notifies_its_members(
     mocked_responses.get(
         _album(immich_base, "album-2"),
         json=album_detail(id="album-2", name="New Album", owner=owner, members=[carol],
-                          assets=[asset("x", "owner", NOW - timedelta(days=400)), asset("y", "owner", created)],
-                          updated_at=created, created_at=created),
+                          counts={"owner": 2}, updated_at=created, created_at=created),
     )
     mocked_responses.post(f"{ntfy_base}/", status=200)
     app.run_once()
 
     posts = _posts(mocked_responses)
-    assert {_topic(p) for p in posts} == {"immich-carol"}   # new member notified, no asset spam
+    # Only the new member: the owner/creator is never told about their own album, which is
+    # the regression guard for the owner now living inside albumUsers.
+    assert {_topic(p) for p in posts} == {"immich-carol"}
     assert _body(posts[0])["title"] == "Album shared with you"
     assert _body(posts[0])["message"] == 'You have been added to "New Album".'
+
+    # The new album's existing photos are recorded, not re-announced next run.
+    mocked_responses.reset()
+    mocked_responses.get(
+        _albums(immich_base),
+        json=[
+            album_summary(id="album-1", owner=owner, asset_count=1, updated_at=old_dt, members=[]),
+            album_summary(id="album-2", name="New Album", owner=owner, asset_count=2, updated_at=created, members=[carol]),
+        ],
+    )
+    app.run_once()
+    assert _posts(mocked_responses) == []
+    assert store.get_contributor_counts("album-2") == {"owner": 2}
 
 
 def test_new_member_and_new_asset_same_cycle(app, store, mocked_responses, immich_base, ntfy_base):
     owner = user("owner", "owner@example.com", "Owner")
     alice = user("alice", "alice@example.com", "Alice")
     t0 = NOW - timedelta(hours=2)
-    _baseline(app, mocked_responses, immich_base, owner, [alice], [asset("a1", "owner", t0)], t0)
+    _baseline(app, mocked_responses, immich_base, owner, [alice], {"owner": 1}, t0)
 
     # Same cycle: alice adds a photo AND dave is invited.
     dave = user("dave", "dave@example.com", "Dave")
-    a2 = asset("a2", "alice", NOW - timedelta(minutes=1))
     t1 = NOW - timedelta(minutes=1)
     mocked_responses.get(_albums(immich_base), json=[album_summary(owner=owner, asset_count=2, updated_at=t1, members=[alice, dave])])
-    mocked_responses.get(_album(immich_base), json=album_detail(owner=owner, members=[alice, dave], assets=[asset("a1", "owner", t0), a2], updated_at=t1))
+    mocked_responses.get(_album(immich_base), json=album_detail(owner=owner, members=[alice, dave], counts={"owner": 1, "alice": 1}, updated_at=t1))
     mocked_responses.post(f"{ntfy_base}/", status=200)
     app.run_once()
 
@@ -210,13 +242,12 @@ def test_ntfy_partial_failure_persists_and_no_respam(app, store, mocked_response
     alice = user("alice", "alice@example.com", "Alice")
     bob = user("bob", "bob@example.com", "Bob")
     t0 = NOW - timedelta(hours=2)
-    _baseline(app, mocked_responses, immich_base, owner, [alice, bob], [asset("a1", "owner", t0)], t0)
+    _baseline(app, mocked_responses, immich_base, owner, [alice, bob], {"owner": 1}, t0)
 
     # Bob adds a photo (sole contributor) -> recipients owner + alice.
-    a2 = asset("a2", "bob", NOW - timedelta(minutes=2))
     t1 = NOW - timedelta(minutes=2)
     mocked_responses.get(_albums(immich_base), json=[album_summary(owner=owner, asset_count=2, updated_at=t1, members=[alice, bob])])
-    mocked_responses.get(_album(immich_base), json=album_detail(owner=owner, members=[alice, bob], assets=[asset("a1", "owner", t0), a2], updated_at=t1))
+    mocked_responses.get(_album(immich_base), json=album_detail(owner=owner, members=[alice, bob], counts={"owner": 1, "bob": 1}, updated_at=t1))
 
     def cb(request):
         topic = json.loads(request.body)["topic"]
@@ -229,7 +260,8 @@ def test_ntfy_partial_failure_persists_and_no_respam(app, store, mocked_response
     assert topics == {"immich-owner", "immich-alice"}      # both attempted
     assert stats.messages_sent == 1
     assert stats.messages_failed == 1
-    assert "a2" in store.get_known_asset_ids("album-1")  # persisted despite a failure
+    # persisted despite a failure
+    assert store.get_contributor_counts("album-1") == {"owner": 1, "bob": 1}
 
     # Next identical cycle: cheap skip -> no re-spam to the topic that DID succeed.
     mocked_responses.reset()
@@ -238,7 +270,94 @@ def test_ntfy_partial_failure_persists_and_no_respam(app, store, mocked_response
     assert _posts(mocked_responses) == []
 
 
-def test_startup_topic_mapping_logs_collision(app, mocked_responses, immich_base, caplog):
+def test_unshare_then_reshare(app, store, mocked_responses, immich_base, ntfy_base):
+    owner = user("owner", "owner@example.com", "Owner")
+    alice = user("alice", "alice@example.com", "Alice")
+    t0 = NOW - timedelta(hours=2)
+    _baseline(app, mocked_responses, immich_base, owner, [alice], {"owner": 1, "alice": 1}, t0)
+
+    # Un-shared: Immich reports shared=false and omits contributorCounts entirely.
+    t1 = NOW - timedelta(minutes=30)
+    unshared = album_detail(owner=owner, members=[], asset_count=2, updated_at=t1)
+    mocked_responses.get(_albums(immich_base), json=[album_summary(owner=owner, asset_count=2, shared=False, updated_at=t1, members=[])])
+    mocked_responses.get(_album(immich_base), json=unshared)
+    app.run_once()
+    assert _posts(mocked_responses) == []
+    # No counts in the payload -> stored counts survive untouched, members are forgotten.
+    assert store.get_contributor_counts("album-1") == {"owner": 1, "alice": 1}
+    assert store.get_known_member_ids("album-1") == set()
+
+    # Re-shared with alice, and the owner added a photo while it was private.
+    mocked_responses.reset()
+    t2 = NOW - timedelta(minutes=1)
+    mocked_responses.get(_albums(immich_base), json=[album_summary(owner=owner, asset_count=3, updated_at=t2, members=[alice])])
+    mocked_responses.get(_album(immich_base), json=album_detail(owner=owner, members=[alice], counts={"owner": 2, "alice": 1}, updated_at=t2))
+    mocked_responses.post(f"{ntfy_base}/", status=200)
+    app.run_once()
+
+    posts = {_topic(p): _body(p) for p in _posts(mocked_responses)}
+    # alice is re-invited, so she gets only the access message; the owner is the sole
+    # contributor of the new photo and is therefore not notified about it.
+    assert set(posts) == {"immich-alice"}
+    assert posts["immich-alice"]["title"] == "Album shared with you"
+    assert store.get_contributor_counts("album-1") == {"owner": 2, "alice": 1}
+
+
+def test_missing_contributor_counts_on_tracked_album_is_inert(
+    app, store, mocked_responses, immich_base
+):
+    owner = user("owner", "owner@example.com", "Owner")
+    alice = user("alice", "alice@example.com", "Alice")
+    t0 = NOW - timedelta(hours=2)
+    _baseline(app, mocked_responses, immich_base, owner, [alice], {"owner": 2}, t0)
+
+    # Still shared, but the field is absent: treat as "no signal", never as "zero assets".
+    t1 = NOW - timedelta(minutes=1)
+    mocked_responses.get(_albums(immich_base), json=[album_summary(owner=owner, asset_count=3, updated_at=t1, members=[alice])])
+    mocked_responses.get(_album(immich_base), json=album_detail(owner=owner, members=[alice], asset_count=3, updated_at=t1))
+    stats = app.run_once()
+
+    assert _posts(mocked_responses) == []
+    assert stats.errors == 0
+    assert store.get_contributor_counts("album-1") == {"owner": 2}
+
+
+def test_upgraded_v1_db_first_run_is_silent(
+    mocked_responses, immich, ntfy, translator, config, db_path, clock, immich_base, ntfy_base
+):
+    """A DB migrated from schema 1 re-baselines silently, then behaves normally."""
+    from test_store import _write_v1_db
+
+    _write_v1_db(db_path)  # pretends the Immich 2.x build left state behind
+    store = Store(db_path)
+    app = App(config, immich, ntfy, store, translator, clock=clock)
+    owner = user("owner", "owner@example.com", "Owner")
+    alice = user("alice", "alice@example.com", "Alice")
+    # An album created *after* the (now-cleared) bootstrap must still stay silent, because
+    # the migration resets bootstrap_at to this run's clock.
+    created = NOW - timedelta(days=1)
+
+    mocked_responses.get(_albums(immich_base), json=[album_summary(owner=owner, asset_count=5, updated_at=created, members=[alice])])
+    mocked_responses.get(_album(immich_base), json=album_detail(owner=owner, members=[alice], counts={"owner": 3, "alice": 2}, updated_at=created, created_at=created))
+    app.run_once()
+    assert _posts(mocked_responses) == []
+    assert store.get_contributor_counts("album-1") == {"owner": 3, "alice": 2}
+
+    # Second run: normal notifications resume.
+    mocked_responses.reset()
+    t1 = NOW - timedelta(minutes=1)
+    mocked_responses.get(_albums(immich_base), json=[album_summary(owner=owner, asset_count=6, updated_at=t1, members=[alice])])
+    mocked_responses.get(_album(immich_base), json=album_detail(owner=owner, members=[alice], counts={"owner": 3, "alice": 3}, updated_at=t1))
+    mocked_responses.post(f"{ntfy_base}/", status=200)
+    app.run_once()
+    assert {_topic(p) for p in _posts(mocked_responses)} == {"immich-owner"}
+    store.close()
+
+
+def test_startup_logs_version_and_topic_mapping(app, mocked_responses, immich_base, caplog):
+    mocked_responses.get(
+        f"{immich_base}/api/server/version", json={"major": 3, "minor": 0, "patch": 0}
+    )
     mocked_responses.get(f"{immich_base}/api/users/me", json=user("me", "me@example.com", "Me"))
     mocked_responses.get(
         f"{immich_base}/api/users",
@@ -251,6 +370,18 @@ def test_startup_topic_mapping_logs_collision(app, mocked_responses, immich_base
     with caplog.at_level(logging.INFO):
         app._log_startup()
     text = caplog.text
+    assert "Immich server version 3.0.0" in text
     assert "immich-david-k" in text
     assert "immich-jane" in text
     assert "COLLISION" in text
+
+
+def test_startup_warns_on_non_v3_server(app, mocked_responses, immich_base, caplog):
+    mocked_responses.get(
+        f"{immich_base}/api/server/version", json={"major": 2, "minor": 7, "patch": 5}
+    )
+    mocked_responses.get(f"{immich_base}/api/users/me", json=user("me", "me@example.com", "Me"))
+    mocked_responses.get(f"{immich_base}/api/users", json=[])
+    with caplog.at_level(logging.INFO):
+        app._log_startup()
+    assert "targets the Immich 3.x API" in caplog.text

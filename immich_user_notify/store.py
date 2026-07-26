@@ -1,23 +1,26 @@
-"""SQLite state store. Holds, per album, the set of seen asset IDs and member IDs
-plus a tiny meta row. The DB mirrors the album's *current* contents (a removed asset
-is deleted from the DB, so re-adding it later counts as new again).
+"""SQLite state store. Holds, per album, the member IDs and the per-contributor asset
+counts seen on the last run, plus a tiny meta row. The DB mirrors the album's *current*
+state (a contributor whose assets are all removed loses their row).
 
-Only IDs are stored -- never asset names. The owner of a *new* asset is read live
-from the album detail, so owner_id is not persisted.
+No asset IDs and no asset names are stored -- only album ids, user ids and counts.
 """
 
 from __future__ import annotations
 
+import logging
 import os
 import sqlite3
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Iterable, Iterator
+from typing import Iterable, Iterator, Mapping
 
 from .timeutil import parse_immich_dt, to_iso_utc
 
-_SCHEMA_VERSION = "1"
+log = logging.getLogger(__name__)
+
+# 1 = per-asset-id tracking (Immich 2.x). 2 = per-contributor counts (Immich 3.x).
+_SCHEMA_VERSION = "2"
 
 
 @dataclass(frozen=True)
@@ -56,6 +59,12 @@ class Store:
                 "CREATE TABLE IF NOT EXISTS schema_meta ("
                 " key TEXT PRIMARY KEY, value TEXT NOT NULL)"
             )
+            # Read the version *before* anything writes it.
+            row = c.execute(
+                "SELECT value FROM schema_meta WHERE key = 'schema_version'"
+            ).fetchone()
+            from_version = row["value"] if row else None
+
             c.execute(
                 "CREATE TABLE IF NOT EXISTS album ("
                 " album_id TEXT PRIMARY KEY,"
@@ -70,13 +79,11 @@ class Store:
             if "member_count" not in album_cols:
                 c.execute("ALTER TABLE album ADD COLUMN member_count INTEGER NOT NULL DEFAULT 0")
             c.execute(
-                "CREATE TABLE IF NOT EXISTS album_asset ("
+                "CREATE TABLE IF NOT EXISTS album_contributor ("
                 " album_id TEXT NOT NULL REFERENCES album(album_id) ON DELETE CASCADE,"
-                " asset_id TEXT NOT NULL,"
-                " PRIMARY KEY (album_id, asset_id))"
-            )
-            c.execute(
-                "CREATE INDEX IF NOT EXISTS idx_album_asset_album ON album_asset(album_id)"
+                " user_id TEXT NOT NULL,"
+                " asset_count INTEGER NOT NULL,"
+                " PRIMARY KEY (album_id, user_id))"
             )
             c.execute(
                 "CREATE TABLE IF NOT EXISTS album_member ("
@@ -84,9 +91,25 @@ class Store:
                 " user_id TEXT NOT NULL,"
                 " PRIMARY KEY (album_id, user_id))"
             )
+
+            if from_version == "1":
+                # Immich 3.0 stopped returning album assets, so the asset-id snapshots are
+                # unusable. Drop them and forget every album, then clear bootstrap_at so the
+                # next run re-establishes it: with no album rows and a fresh bootstrap every
+                # album is "pre-existing" and gets baselined silently, exactly like a first
+                # install against an existing library. No notifications for that one run.
+                c.execute("DROP TABLE IF EXISTS album_asset")
+                c.execute("DELETE FROM album")  # cascades album_member/album_contributor
+                c.execute("DELETE FROM schema_meta WHERE key = 'bootstrap_at'")
+                log.warning(
+                    "migrated state DB from schema 1 to %s (Immich 3.0 API): all albums will"
+                    " be re-baselined silently on this run; notifications resume next run",
+                    _SCHEMA_VERSION,
+                )
+
             c.execute(
                 "INSERT INTO schema_meta(key, value) VALUES('schema_version', ?)"
-                " ON CONFLICT(key) DO NOTHING",
+                " ON CONFLICT(key) DO UPDATE SET value = excluded.value",
                 (_SCHEMA_VERSION,),
             )
 
@@ -152,25 +175,22 @@ class Store:
             ),
         )
 
-    # --- assets -----------------------------------------------------------
+    # --- contributor counts -----------------------------------------------
 
-    def get_known_asset_ids(self, album_id: str) -> set[str]:
+    def get_contributor_counts(self, album_id: str) -> dict[str, int]:
         rows = self._conn.execute(
-            "SELECT asset_id FROM album_asset WHERE album_id = ?", (album_id,)
+            "SELECT user_id, asset_count FROM album_contributor WHERE album_id = ?",
+            (album_id,),
         ).fetchall()
-        return {r["asset_id"] for r in rows}
+        return {r["user_id"]: r["asset_count"] for r in rows}
 
-    def add_known_assets(self, album_id: str, asset_ids: Iterable[str]) -> None:
+    def replace_contributor_counts(self, album_id: str, counts: Mapping[str, int]) -> None:
+        """Replace the album's whole map. A contributor missing from `counts` is deleted:
+        leaving a stale count behind would swallow that user's next upload."""
+        self._conn.execute("DELETE FROM album_contributor WHERE album_id = ?", (album_id,))
         self._conn.executemany(
-            "INSERT INTO album_asset(album_id, asset_id) VALUES(?, ?)"
-            " ON CONFLICT(album_id, asset_id) DO NOTHING",
-            [(album_id, aid) for aid in asset_ids],
-        )
-
-    def remove_known_assets(self, album_id: str, asset_ids: Iterable[str]) -> None:
-        self._conn.executemany(
-            "DELETE FROM album_asset WHERE album_id = ? AND asset_id = ?",
-            [(album_id, aid) for aid in asset_ids],
+            "INSERT INTO album_contributor(album_id, user_id, asset_count) VALUES(?, ?, ?)",
+            [(album_id, uid, n) for uid, n in counts.items()],
         )
 
     # --- members ----------------------------------------------------------

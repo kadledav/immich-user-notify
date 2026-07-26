@@ -1,4 +1,4 @@
-"""Typed wrapper over the Immich REST API (>= 2.7.5).
+"""Typed wrapper over the Immich REST API (3.0.0; not compatible with 2.x).
 
 Dumb client: HTTP in, dataclasses out, retries inside. No business logic.
 Auth is the `x-api-key` header set on the session.
@@ -12,8 +12,10 @@ from typing import Any, Callable
 import requests
 
 from .httpclient import request_with_retries
-from .models import AlbumDetail, AlbumSummary, Asset, Member
+from .models import AlbumDetail, AlbumSummary, Member
 from .timeutil import parse_immich_dt
+
+_OWNER_ROLE = "owner"
 
 
 class ImmichError(Exception):
@@ -29,51 +31,68 @@ def _map_user(dto: dict[str, Any], *, role: str | None = None) -> Member:
     )
 
 
-def _map_members(dto: dict[str, Any]) -> list[Member]:
+def _split_album_users(dto: dict[str, Any]) -> tuple[Member, list[Member]]:
+    """Split `albumUsers` into (owner, other members).
+
+    Since Immich 3.0 the owner is an `albumUsers` entry with role "owner" (the old
+    `owner`/`ownerId` fields are gone). Never rely on position: the server orders the
+    list by role then name, so an editor commonly sorts first.
+    """
+    owner: Member | None = None
     members: list[Member] = []
     for au in dto.get("albumUsers") or []:
         user = au.get("user") or {}
         if not user.get("id"):
             continue
-        members.append(_map_user(user, role=au.get("role")))
-    return members
+        role = au.get("role")
+        member = _map_user(user, role=role)
+        if role == _OWNER_ROLE and owner is None:
+            owner = member
+        else:
+            members.append(member)
+    if owner is None:
+        raise ValueError("albumUsers has no entry with role 'owner'")
+    # Belt-and-braces: the owner must never appear as a shared member, or they would be
+    # notified that their own album was shared with them.
+    members = [m for m in members if m.user_id != owner.user_id]
+    return owner, members
 
 
-def _map_asset(dto: dict[str, Any]) -> Asset:
-    file_created = dto.get("fileCreatedAt")
-    return Asset(
-        id=dto["id"],
-        owner_id=dto["ownerId"],
-        created_at=parse_immich_dt(dto["createdAt"]),
-        file_created_at=parse_immich_dt(file_created) if file_created else None,
-        original_file_name=dto.get("originalFileName"),
-        type=dto.get("type"),
-    )
+def _map_contributor_counts(dto: dict[str, Any]) -> dict[str, int] | None:
+    """userId -> asset count, or None when Immich omitted the field.
+
+    Immich only computes `contributorCounts` for shared albums. An *empty list* means
+    "shared album, no assets" and must stay distinct from an absent field, which means
+    "no signal at all" -- collapsing the two would make removing and re-adding every
+    photo look like no change.
+    """
+    raw = dto.get("contributorCounts")
+    if raw is None:
+        return None
+    return {c["userId"]: int(c["assetCount"]) for c in raw}
 
 
 def _map_album_summary(dto: dict[str, Any]) -> AlbumSummary:
     return AlbumSummary(
         id=dto["id"],
         name=dto["albumName"],
-        owner_id=dto["ownerId"],
         asset_count=int(dto.get("assetCount", 0)),
         shared=bool(dto.get("shared", False)),
         updated_at=parse_immich_dt(dto["updatedAt"]),
-        owner=_map_user(dto["owner"]),
         member_count=len(dto.get("albumUsers") or []),
     )
 
 
 def _map_album_detail(dto: dict[str, Any]) -> AlbumDetail:
+    owner, members = _split_album_users(dto)
     return AlbumDetail(
         id=dto["id"],
         name=dto["albumName"],
-        owner_id=dto["ownerId"],
         created_at=parse_immich_dt(dto["createdAt"]),
         updated_at=parse_immich_dt(dto["updatedAt"]),
-        owner=_map_user(dto["owner"]),
-        members=_map_members(dto),
-        assets=[_map_asset(a) for a in (dto.get("assets") or [])],
+        owner=owner,
+        members=members,
+        contributor_counts=_map_contributor_counts(dto),
     )
 
 
@@ -122,6 +141,10 @@ class ImmichClient:
             raise ImmichError(f"GET {path}: invalid JSON response") from exc
 
     def list_albums(self) -> list[AlbumSummary]:
+        # Deliberately unfiltered. Immich 3.0 renamed the `shared` filter to `isShared`
+        # and added `isOwned`, but filtering to shared albums would hide an album that
+        # we already track and that has since been un-shared, so we would stop updating
+        # its state. Cheap either way: the list response carries no assets.
         data = self._get("/albums")
         return _mapped("/albums", lambda: [_map_album_summary(a) for a in data])
 
@@ -140,3 +163,11 @@ class ImmichClient:
     def get_me(self) -> Member:
         data = self._get("/users/me")
         return _mapped("/users/me", lambda: _map_user(data))
+
+    def get_server_version(self) -> tuple[int, int, int]:
+        """(major, minor, patch) from GET /api/server/version (needs no key scope)."""
+        data = self._get("/server/version")
+        return _mapped(
+            "/server/version",
+            lambda: (int(data["major"]), int(data["minor"]), int(data["patch"])),
+        )

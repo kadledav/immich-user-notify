@@ -126,14 +126,14 @@ class App:
         return stats
 
     def _process_album(self, summary, detail, prior, bootstrap_at, stats: RunStats) -> None:
-        known_assets = self._store.get_known_asset_ids(detail.id)
+        known_counts = self._store.get_contributor_counts(detail.id)
         known_members = self._store.get_known_member_ids(detail.id)
 
         diff = diff_album(
             detail=detail,
             prior=prior,
-            known_asset_ids=known_assets,
             known_member_ids=known_members,
+            known_contributor_counts=known_counts,
             bootstrap_at=bootstrap_at,
         )
 
@@ -151,9 +151,11 @@ class App:
                 stats.errors += 1
 
         # Persist the whole delta atomically and unconditionally. upsert_album_meta
-        # first so the album row exists before asset/member FKs reference it. Gate
-        # fields (asset_count/member_count/updated_at) are stored from the LIST summary
-        # so the next run's change check compares like-for-like.
+        # first so the album row exists before the contributor/member FKs reference it.
+        # Gate fields (asset_count/member_count/updated_at) are stored from the LIST
+        # summary so the next run's change check compares like-for-like: if a photo lands
+        # between the list call and the detail call, the gate fires again next run and the
+        # contributor delta is then zero, so nobody is notified twice.
         with self._store.transaction():
             self._store.upsert_album_meta(
                 detail.id,
@@ -163,10 +165,10 @@ class App:
                 updated_at=summary.updated_at,
                 baseline_done=True,
             )
-            if diff.assets_to_add:
-                self._store.add_known_assets(detail.id, diff.assets_to_add)
-            if diff.assets_to_remove:
-                self._store.remove_known_assets(detail.id, diff.assets_to_remove)
+            if diff.contributor_counts_to_store is not None:
+                self._store.replace_contributor_counts(
+                    detail.id, diff.contributor_counts_to_store
+                )
             if diff.members_to_add:
                 self._store.add_known_members(detail.id, diff.members_to_add)
             if diff.members_to_remove:
@@ -218,6 +220,8 @@ class App:
     def _contributor_names(self, detail, events) -> dict[str, str]:
         names = {m.user_id: _display_name(m) for m in (detail.owner, *detail.members)}
         # Resolve any single-contributor whose name we don't have yet (best effort).
+        # Immich counts assets by owner, including people who have since been removed
+        # from the album, so this lookup matters more than the member list suggests.
         for event in events:
             if isinstance(event, AssetsAddedEvent) and len(set(event.contributor_ids)) == 1:
                 cid = event.contributor_ids[0]
@@ -260,6 +264,20 @@ class App:
     # --- startup ----------------------------------------------------------
 
     def _log_startup(self) -> None:
+        try:
+            major, minor, patch = self._immich.get_server_version()
+            log.info("Immich server version %d.%d.%d", major, minor, patch)
+            if major != 3:
+                log.warning(
+                    "this build targets the Immich 3.x API; server reports %d.%d.%d --"
+                    " album parsing will most likely fail",
+                    major,
+                    minor,
+                    patch,
+                )
+        except ImmichError as exc:
+            log.warning("could not fetch the Immich server version: %s", exc)
+
         try:
             me = self._immich.get_me()
             log.info("authenticated to Immich as %s <%s> (id=%s)", me.name, me.email, me.user_id)

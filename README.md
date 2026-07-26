@@ -5,6 +5,10 @@ your account can see and sends a **per-user** [ntfy](https://ntfy.sh) push when
 photos or members are added — notifying everyone who can see the album **except**
 the person who made the change.
 
+Requires **Immich ≥ 3.0.0**. Immich 3.0 reworked the album API (no more `owner`/`assets`
+fields), so this version is not compatible with Immich 2.x — see
+[Upgrading from an Immich 2.x setup](#upgrading-from-an-immich-2x-setup).
+
 Inspired by [pman07/Immich_Notify](https://github.com/pman07/Immich_Notify), but a fresh,
 independent implementation with a different design:
 
@@ -15,7 +19,7 @@ independent implementation with a different design:
 
 1. **Immich API key** — in Immich, *Account Settings → API Keys*, create a key with the
    `album.read` and `user.read` permissions, from an account that can see every album you
-   want monitored.
+   want monitored. Requires **Immich 3.0.0 or newer**.
 2. **ntfy publisher** — on your ntfy server, create the account this app publishes with and
    allow it to publish to the `immich-*` topics:
    `ntfy user add immich-notify` then `ntfy access immich-notify 'immich-*' wo`.
@@ -60,11 +64,12 @@ Every `PERIODIC_CHECK_INTERVAL_MINUTES` it:
 
 1. Lists albums (`GET /api/albums`) and, for any album whose `assetCount`/member count/
    `updatedAt` changed, fetches the detail (`GET /api/albums/{id}`).
-2. Diffs the album's asset-ID set and member-ID set against a small local SQLite DB
-   (it stores **only IDs**, never photo names). New asset IDs and new member IDs are
-   the changes.
-3. Attributes each new photo to its uploader via `asset.ownerId` — in Immich only an
-   asset's owner can add it to an album, so this reliably identifies the contributor.
+2. Diffs the album's **per-contributor asset counts** (`contributorCounts`) and its
+   member-ID set against a small local SQLite DB. Any contributor whose count *grew*
+   added photos; the sum of those increases is how many.
+3. Attribution comes straight from the server, which groups an album's assets by
+   `asset.ownerId` — in Immich only an asset's owner can add it to an album, so this
+   reliably identifies the contributor.
 4. Sends notifications:
    - **New photos** → everyone who can see the album, **minus** the contributor,
      regardless of when the photos were originally uploaded. If a single person added
@@ -85,15 +90,32 @@ Safety details:
   get a "you have been added" notification. An old album that merely becomes visible to
   the account later (e.g. shared with it) stays silent, so you aren't spammed about an
   album's whole back-catalogue.
+- **Nothing about the photos is stored.** The local DB holds album IDs, user IDs and
+  per-user counts — no asset IDs, no file names.
 - One ntfy topic per person, derived from their email: `immich-` followed by the part
   before `@`, with every character outside `[A-Za-z0-9_-]` replaced by `-`, lowercased.
   e.g. `david.k@example.com` → topic `immich-david-k`. **At startup the full
   `email → topic` map is logged** (with a warning on any collision) so you know exactly
-  which topic each person must subscribe to.
+  which topic each person must subscribe to. With a **non-admin** API key Immich's
+  `/api/users` only returns the key's own account, so that map lists a single entry —
+  use an admin account's key if you want to see the whole mapping. Everything else keeps
+  working either way; recipients come from the album payload itself.
 
 > Note: Immich exposes no "added-to-album" timestamp (only the asset's upload time),
 > which is why detection relies on snapshot diffing rather than timestamps — that's
-> also why adding an old photo to an album still notifies. Requires **Immich ≥ 2.7.5**.
+> also why adding an old photo to an album still notifies. `updatedAt` is a bonus
+> change signal, not a guarantee: `assetCount`, the member count and
+> `FORCE_FULL_SCAN_EVERY` are what make detection self-healing.
+> Requires **Immich ≥ 3.0.0** — the 3.0 album API is not backward compatible, so this
+> version does **not** work with Immich 2.x (and vice versa).
+
+### Upgrading from an Immich 2.x setup
+
+Pull the new image; the existing `state.db` migrates itself (the old per-asset table is
+dropped and the album baseline is reset). **The first run after the upgrade sends no
+notifications** — it silently re-records every album, exactly like a fresh install
+against an existing library — and normal notifications resume on the next run. The API
+key needs no new permissions.
 
 ## Configuration
 
@@ -126,8 +148,8 @@ Create the key under **Account Settings → API Keys**. Only **read** scopes are
 
 | Permission | Used for |
 |---|---|
-| `album.read` | List albums and read each album's assets + shared members — the core of change detection. **Required.** |
-| `user.read` | The startup `email → topic` mapping (lists all users) and resolving a contributor's display name when they aren't in an album's member list. Pick `user.read`, **not** `adminUser.read` (that one is only for the `/admin/users` endpoints, which this app never calls). |
+| `album.read` | List albums and read each album's per-contributor asset counts + shared members — the core of change detection. **Required.** |
+| `user.read` | The startup `email → topic` mapping (lists users) and resolving a contributor's display name when they aren't in an album's member list. Pick `user.read`, **not** `adminUser.read` (that one is only for the `/admin/users` endpoints, which this app never calls). |
 
 `album.read` is essential. Without `user.read` the app still detects changes and sends
 notifications — recipient emails come from the album payload itself — but the startup
@@ -183,7 +205,9 @@ or build it locally with `build: .`.
    `ntfy access immich-notify 'immich-*' wo`.
 2. Each person needs read access to their own topic and must subscribe to it, e.g.
    `ntfy access alice immich-alice ro` (ntfy defaults to deny-all).
-3. The `IMMICH_TOKEN` key needs the `album.read` and `user.read` permissions (see
+3. Immich must be **3.0.0 or newer**; the version is logged (and a mismatch warned about)
+   on startup.
+4. The `IMMICH_TOKEN` key needs the `album.read` and `user.read` permissions (see
    [Immich API key permissions](#immich-api-key-permissions)), and its account must
    **own or be shared into** every album you want monitored (it can only see albums it
    has access to).
@@ -218,3 +242,11 @@ push to `main` / a `v*` tag.
 - Two different emails can sanitize to the same topic; this is surfaced in the startup
   log so you can spot it.
 - Additions only: removals (photos or members) update local state silently and never notify.
+- Detection compares per-person photo counts, so if the *same* person removes and adds an
+  equal number of photos within one poll interval the two cancel out and nothing is sent.
+- Restoring a photo from the Immich trash looks like an addition.
+- The counts Immich reports include archived/hidden assets while the album's `assetCount`
+  does not, so adding an *already archived* photo may not trip the cheap change check;
+  it is then picked up by the next full scan (at most
+  `PERIODIC_CHECK_INTERVAL_MINUTES × FORCE_FULL_SCAN_EVERY` later).
+- Album rows for albums later deleted in Immich are never pruned from the local DB.

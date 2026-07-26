@@ -16,47 +16,41 @@ class Member:
     user_id: str
     email: str | None
     name: str | None
-    role: str | None = None  # "editor" | "viewer" for shared users; None for the owner
+    role: str | None = None  # "owner" | "editor" | "viewer" (Immich AlbumUserRole)
 
 
 @dataclass(frozen=True)
 class AlbumSummary:
-    """An entry from GET /api/albums (assets not relied upon here)."""
+    """An entry from GET /api/albums. Only cheap change signals are used from here."""
 
     id: str
     name: str
-    owner_id: str
     asset_count: int
     shared: bool
     updated_at: datetime
-    owner: Member
-    member_count: int = 0  # number of shared members (albumUsers) per the list endpoint
-
-
-@dataclass(frozen=True)
-class Asset:
-    """An entry in an album's assets[]. created_at is upload-to-Immich time."""
-
-    id: str
-    owner_id: str
-    created_at: datetime
-    file_created_at: datetime | None = None
-    original_file_name: str | None = None
-    type: str | None = None
+    # len(albumUsers) per the list endpoint. Since Immich 3.0 that list *includes*
+    # the owner, so this is not a count of shared members -- it is only ever compared
+    # against its own previous value to spot a membership change.
+    member_count: int = 0
 
 
 @dataclass(frozen=True)
 class AlbumDetail:
-    """GET /api/albums/{id}: the full album with assets and shared members."""
+    """GET /api/albums/{id}: shared members plus per-contributor asset counts.
+
+    Immich 3.0 removed `assets[]` from album responses; `contributor_counts` maps
+    userId -> number of assets that user has in the album. Immich only computes it for
+    *shared* albums, so it is None for an album with no other members and no shared
+    link (i.e. no signal, not "no assets").
+    """
 
     id: str
     name: str
-    owner_id: str
     created_at: datetime
     updated_at: datetime
     owner: Member
-    members: list[Member]   # albumUsers; does NOT include the owner
-    assets: list[Asset]
+    members: list[Member]   # albumUsers minus the owner
+    contributor_counts: dict[str, int] | None
 
 
 @dataclass(frozen=True)
@@ -64,8 +58,8 @@ class AssetsAddedEvent:
     kind: Literal["assets_added"]
     album_id: str
     album_name: str
-    new_asset_count: int          # count of *notifiable* new assets
-    contributor_ids: list[str]    # distinct owner_ids among the notifiable new assets
+    new_asset_count: int          # sum of the positive per-contributor deltas
+    contributor_ids: list[str]    # distinct user ids whose asset count grew
 
 
 @dataclass(frozen=True)
