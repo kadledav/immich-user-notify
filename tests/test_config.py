@@ -14,6 +14,13 @@ BASE_ENV = {
     "NTFY_PUBLISHER_PASSWORD": "secret",
 }
 
+NTFY_TOKEN_ENV = {
+    "IMMICH_TOKEN": "t",
+    "IMMICH_PRIVATE_URL": "http://immich:2283/",
+    "IMMICH_PUBLIC_URL": "https://photos.example.com/",
+    "NTFY_INTERNAL_URL": "http://ntfy:80/",
+    "NTFY_PUBLISHER_TOKEN": "tk_abc123",
+}
 
 def test_defaults_and_url_stripping():
     c = load_config(BASE_ENV)
@@ -81,3 +88,75 @@ def test_invalid_tunables_raise(overrides):
 )
 def test_resolve_level(level, expected):
     assert resolve_level(level) == expected
+
+def test_ntfy_token_alone_is_sufficient():
+    c = load_config(NTFY_TOKEN_ENV)
+    assert c.ntfy_publisher_token == "tk_abc123"
+    assert c.ntfy_publisher_username is None
+    assert c.ntfy_publisher_password is None
+
+
+def test_immich_token_file_is_read(tmp_path):
+    token_file = tmp_path / "immich_token"
+    token_file.write_text("file-token\n")
+    env = {**BASE_ENV, "IMMICH_TOKEN_FILE": str(token_file)}
+    del env["IMMICH_TOKEN"]
+    c = load_config(env)
+    assert c.immich_token == "file-token"
+
+
+def test_immich_token_file_takes_precedence_over_inline(tmp_path):
+    token_file = tmp_path / "immich_token"
+    token_file.write_text("file-token")
+    env = {**BASE_ENV, "IMMICH_TOKEN_FILE": str(token_file)}
+    c = load_config(env)
+    assert c.immich_token == "file-token"
+
+
+def test_ntfy_token_file_is_read(tmp_path):
+    token_file = tmp_path / "ntfy_token"
+    token_file.write_text("tk_from_file\n")
+    env = {**NTFY_TOKEN_ENV, "NTFY_PUBLISHER_TOKEN_FILE": str(token_file)}
+    del env["NTFY_PUBLISHER_TOKEN"]
+    c = load_config(env)
+    assert c.ntfy_publisher_token == "tk_from_file"
+
+
+def test_missing_immich_token_and_file_raises():
+    env = {k: v for k, v in BASE_ENV.items() if k != "IMMICH_TOKEN"}
+    with pytest.raises(ConfigError) as excinfo:
+        load_config(env)
+    assert "IMMICH_TOKEN" in str(excinfo.value)
+
+
+def test_missing_ntfy_auth_entirely_raises():
+    env = {
+        "IMMICH_TOKEN": "t",
+        "IMMICH_PRIVATE_URL": "http://immich:2283/",
+        "IMMICH_PUBLIC_URL": "https://photos.example.com/",
+        "NTFY_INTERNAL_URL": "http://ntfy:80/",
+        # no NTFY_PUBLISHER_TOKEN(_FILE), no USERNAME/PASSWORD
+    }
+    with pytest.raises(ConfigError) as excinfo:
+        load_config(env)
+    assert "NTFY_PUBLISHER" in str(excinfo.value)
+
+
+def test_ntfy_partial_username_without_password_raises():
+    env = {
+        "IMMICH_TOKEN": "t",
+        "IMMICH_PRIVATE_URL": "http://immich:2283/",
+        "IMMICH_PUBLIC_URL": "https://photos.example.com/",
+        "NTFY_INTERNAL_URL": "http://ntfy:80/",
+        "NTFY_PUBLISHER_USERNAME": "pub",
+    }
+    with pytest.raises(ConfigError):
+        load_config(env)
+
+
+def test_unreadable_token_file_raises():
+    env = {**BASE_ENV, "IMMICH_TOKEN_FILE": "/nonexistent/path/token"}
+    del env["IMMICH_TOKEN"]
+    with pytest.raises(ConfigError) as excinfo:
+        load_config(env)
+    assert "IMMICH_TOKEN_FILE" in str(excinfo.value)

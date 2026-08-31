@@ -126,12 +126,15 @@ All configuration is via environment variables (typically set in Docker).
 
 | Env var | Required | Default | Meaning |
 |---|---|---|---|
-| `IMMICH_TOKEN` | yes | — | Immich API key, sent as `x-api-key` (needs `album.read` + `user.read` — see below) |
+| `IMMICH_TOKEN` | yes [^1] | — | Immich API key, sent as `x-api-key` (needs `album.read` + `user.read` — see below) |
+| `IMMICH_TOKEN_FILE` | yes [^1] | — | Immich API key, file-based auth, sent as `x-api-key` (needs `album.read` + `user.read` — see below) |
 | `IMMICH_PRIVATE_URL` | yes | — | Internal Immich base URL, e.g. `http://immich_server:2283` |
 | `IMMICH_PUBLIC_URL` | yes | — | Public Immich URL for notification links, e.g. `https://photos.example.com` |
 | `NTFY_INTERNAL_URL` | yes | — | Internal ntfy base URL, e.g. `http://ntfy:80` |
-| `NTFY_PUBLISHER_USERNAME` | yes | — | ntfy account used to publish (HTTP Basic auth) |
-| `NTFY_PUBLISHER_PASSWORD` | yes | — | password for that account |
+| `NTFY_PUBLISHER_TOKEN` | yes [^2] | — | ntfy account token (Bearer auth) |
+| `NTFY_PUBLISHER_TOKEN_FILE` | yes [^2] | — | ntfy account token, file-based auth (Bearer auth) |
+| `NTFY_PUBLISHER_USERNAME` | yes [^2] | — | ntfy account used to publish (HTTP Basic auth) |
+| `NTFY_PUBLISHER_PASSWORD` | yes [^2] | — | password for that account |
 | `PERIODIC_CHECK_INTERVAL_MINUTES` | no | `15` | how often to poll (minutes, ≥ 1) |
 | `DEFAULT_LANGUAGE` | no | `en` | language for everyone unless overridden (e.g. `cs`) |
 | `USER_LANGUAGES` | no | — | per-person overrides by email, e.g. `david.k@example.com=cs,jane@example.com=en` |
@@ -143,6 +146,10 @@ All configuration is via environment variables (typically set in Docker).
 | `HTTP_RETRIES` | no | `3` | total HTTP attempts per request (incl. the first) |
 | `TZ` | no | `UTC` | affects log timestamps only (change detection is always UTC) |
 | `LOG_LEVEL` | no | `INFO` | logging level (unknown values fall back to `INFO`) |
+
+[^1]: Exactly one of `IMMICH_TOKEN` or `IMMICH_TOKEN_FILE` must be set.
+
+[^2]: Either `NTFY_PUBLISHER_TOKEN` (or `NTFY_PUBLISHER_TOKEN_FILE`), or both `NTFY_PUBLISHER_USERNAME` and `NTFY_PUBLISHER_PASSWORD`, must be set.
 
 ### Immich API key permissions
 
