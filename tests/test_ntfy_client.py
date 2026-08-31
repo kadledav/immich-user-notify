@@ -2,8 +2,9 @@ import base64
 import json
 
 import pytest
+import requests
 
-from immich_user_notify.ntfy_client import NtfyError
+from immich_user_notify.ntfy_client import NtfyClient, NtfyError
 
 
 def test_publish_posts_json_to_root(ntfy, mocked_responses, ntfy_base):
@@ -58,3 +59,35 @@ def test_publish_failure_raises(ntfy, mocked_responses, ntfy_base):
     mocked_responses.post(f"{ntfy_base}/", status=500)
     with pytest.raises(NtfyError):
         ntfy.publish("t", message="x", title="T")
+
+def test_token_auth_uses_bearer_header(mocked_responses, ntfy_base):
+    client = NtfyClient(ntfy_base, token="tk_abc123", session=requests.Session(), retries=1)
+    mocked_responses.post(f"{ntfy_base}/", status=200)
+    client.publish("t", message="x", title="T")
+    req = mocked_responses.calls[0].request
+    assert req.headers["Authorization"] == "Bearer tk_abc123"
+
+
+def test_token_takes_precedence_over_username_password(mocked_responses, ntfy_base):
+    client = NtfyClient(
+        ntfy_base,
+        username="pub",
+        password="secret",
+        token="tk_abc123",
+        session=requests.Session(),
+        retries=1,
+    )
+    mocked_responses.post(f"{ntfy_base}/", status=200)
+    client.publish("t", message="x", title="T")
+    req = mocked_responses.calls[0].request
+    assert req.headers["Authorization"] == "Bearer tk_abc123"
+
+
+def test_missing_all_auth_raises(ntfy_base):
+    with pytest.raises(ValueError):
+        NtfyClient(ntfy_base, session=requests.Session(), retries=1)
+
+
+def test_partial_username_only_raises(ntfy_base):
+    with pytest.raises(ValueError):
+        NtfyClient(ntfy_base, username="pub", session=requests.Session(), retries=1)
