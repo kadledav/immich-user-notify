@@ -9,9 +9,9 @@ from __future__ import annotations
 import logging
 import os
 import re
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Mapping
 
 log = logging.getLogger(__name__)
 
@@ -28,12 +28,9 @@ _DEFAULT_LOCALES_DIR = str(Path(__file__).resolve().parent.parent / "locales")
 _DEFAULT_ICON_URL = "https://raw.githubusercontent.com/immich-app/immich/main/design/immich-logo.png"
 
 _REQUIRED = (
-    "IMMICH_TOKEN",
     "IMMICH_PRIVATE_URL",
     "IMMICH_PUBLIC_URL",
     "NTFY_INTERNAL_URL",
-    "NTFY_PUBLISHER_USERNAME",
-    "NTFY_PUBLISHER_PASSWORD",
 )
 
 
@@ -47,8 +44,9 @@ class Config:
     immich_private_url: str       # internal base, no trailing slash, no /api suffix
     immich_public_url: str        # public base for Click links, no trailing slash
     ntfy_internal_url: str        # e.g. http://ntfy:80, no trailing slash
-    ntfy_publisher_username: str
-    ntfy_publisher_password: str
+    ntfy_publisher_username: str | None = None
+    ntfy_publisher_password: str | None = None
+    ntfy_publisher_token: str | None = None
     interval_minutes: int = 15
     db_path: str = "/data/state.db"
     log_level: str = "INFO"
@@ -163,16 +161,51 @@ def load_config(env: Mapping[str, str] | None = None) -> Config:
     http_retries = _int_env(env, "HTTP_RETRIES", 3, minimum=1, errors=errors)
     http_timeout_s = _float_env(env, "HTTP_TIMEOUT_S", 30.0, minimum=0.1, errors=errors)
 
+    immich_token_file = (env.get("IMMICH_TOKEN_FILE") or "").strip()
+    immich_token_inline = (env.get("IMMICH_TOKEN") or "").strip()
+
+    immich_token: str | None = None
+    if immich_token_file:
+        try:
+            immich_token = Path(immich_token_file).read_text(encoding="utf-8").strip()
+        except OSError as exc:
+            errors.append(f"could not read IMMICH_TOKEN_FILE ({immich_token_file}): {exc}")
+    elif immich_token_inline:
+        immich_token = immich_token_inline
+
+    if not immich_token:
+        errors.append("must set either IMMICH_TOKEN or IMMICH_TOKEN_FILE")
+
+    ntfy_token_file = (env.get("NTFY_PUBLISHER_TOKEN_FILE") or "").strip()
+    ntfy_token_inline = (env.get("NTFY_PUBLISHER_TOKEN") or "").strip()
+    ntfy_username = (env.get("NTFY_PUBLISHER_USERNAME") or "").strip()
+    ntfy_password = (env.get("NTFY_PUBLISHER_PASSWORD") or "").strip()
+
+    ntfy_token: str | None = None
+    if ntfy_token_file:
+        try:
+            ntfy_token = Path(ntfy_token_file).read_text(encoding="utf-8").strip()
+        except OSError as exc:
+            errors.append(f"could not read NTFY_PUBLISHER_TOKEN_FILE ({ntfy_token_file}): {exc}")
+    elif ntfy_token_inline:
+        ntfy_token = ntfy_token_inline
+
+    if not ntfy_token and not (ntfy_username and ntfy_password):
+        errors.append(
+            "must set either NTFY_PUBLISHER_TOKEN / NTFY_PUBLISHER_TOKEN_FILE, or both NTFY_PUBLISHER_USERNAME and NTFY_PUBLISHER_PASSWORD"
+        )
+
     if errors:
         raise ConfigError("Invalid configuration:\n  - " + "\n  - ".join(errors))
 
     return Config(
-        immich_token=env["IMMICH_TOKEN"].strip(),
+        immich_token=immich_token,
         immich_private_url=_strip_url(env["IMMICH_PRIVATE_URL"]),
         immich_public_url=_strip_url(env["IMMICH_PUBLIC_URL"]),
         ntfy_internal_url=_strip_url(env["NTFY_INTERNAL_URL"]),
         ntfy_publisher_username=env["NTFY_PUBLISHER_USERNAME"],
         ntfy_publisher_password=env["NTFY_PUBLISHER_PASSWORD"],
+        ntfy_publisher_token=ntfy_token,
         interval_minutes=interval_minutes,
         db_path=(env.get("DB_PATH") or "/data/state.db").strip(),
         log_level=(env.get("LOG_LEVEL") or "INFO").strip(),

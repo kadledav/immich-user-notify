@@ -30,9 +30,10 @@ class NtfyClient:
     def __init__(
         self,
         base_url: str,
-        username: str,
-        password: str,
         *,
+        username: str | None = None,
+        password: str | None = None,
+        token: str | None = None,
         session: requests.Session,
         timeout_s: float = 30.0,
         retries: int = 3,
@@ -40,8 +41,13 @@ class NtfyClient:
     ) -> None:
         self._base_url = base_url.rstrip("/")
         self._session = session
-        token = base64.b64encode(f"{username}:{password}".encode("utf-8")).decode("ascii")
-        self._session.headers["Authorization"] = f"Basic {token}"
+        if token:
+            self._session.headers["Authorization"] = f"Bearer {token}"
+        elif username and password:
+            b64 = base64.b64encode(f"{username}:{password}".encode("utf-8")).decode("ascii")
+            self._session.headers["Authorization"] = f"Basic {b64}"
+        else:
+            raise ValueError("NtfyClient requires either 'token' or both 'username' and 'password'")
         self._timeout = timeout_s
         self._retries = retries
         self._sleep = sleep

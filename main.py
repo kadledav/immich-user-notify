@@ -43,8 +43,9 @@ def main() -> None:
     )
     ntfy = NtfyClient(
         config.ntfy_internal_url,
-        config.ntfy_publisher_username,
-        config.ntfy_publisher_password,
+        username=config.ntfy_publisher_username,
+        password=config.ntfy_publisher_password,
+        token=config.ntfy_publisher_token,
         session=requests.Session(),
         timeout_s=config.http_timeout_s,
         retries=config.http_retries,

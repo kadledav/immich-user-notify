@@ -88,8 +88,8 @@ def immich(config):
 def ntfy(config):
     return NtfyClient(
         config.ntfy_internal_url,
-        config.ntfy_publisher_username,
-        config.ntfy_publisher_password,
+        username=config.ntfy_publisher_username,
+        password=config.ntfy_publisher_password,
         session=requests.Session(),
         retries=1,
     )
